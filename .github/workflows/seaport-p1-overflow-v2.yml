@@ -1,0 +1,86 @@
+name: Seaport exact-runtime overflow verdict
+
+on:
+  push:
+    branches:
+      - research/seaport-15-channel-20260909
+    paths:
+      - .github/workflows/seaport-p1-overflow-v2.yml
+      - research/seaport-p1-overflow/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: research/seaport-15-channel-20260909
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.4.4
+      - name: Prepare exact source
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf core output
+          mkdir -p output
+          git clone --recurse-submodules https://github.com/ProjectOpenSea/seaport-core.git core
+          git -C core checkout 523097f9cee66c15d308c900c50f336b291cda08
+          git -C core submodule update --init --recursive
+          mkdir -p core/test
+          cp research/seaport-p1-overflow/AggregationOverflow.t.sol core/test/AggregationOverflow.t.sol
+      - name: Run exact-runtime tests
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          cd core
+          forge --version | tee ../output/forge-version.txt
+          git rev-parse HEAD | tee ../output/core-commit.txt
+          forge test --match-contract AggregationOverflowTest -vvv 2>&1 | tee ../output/test-output.txt
+          echo "${PIPESTATUS[0]}" > ../output/exit-code.txt
+      - name: Classify and persist
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          text=Path('output/test-output.txt').read_text(errors='replace') if Path('output/test-output.txt').exists() else ''
+          rc=Path('output/exit-code.txt').read_text().strip() if Path('output/exit-code.txt').exists() else 'missing'
+          if 'P1_OVERFLOW_CONFIRMED' in text:
+              verdict='P1_OVERFLOW_CONFIRMED'
+          elif 'CANONICAL_CONTROL_OK' in text and 'OVERFLOW_REJECTED' in text:
+              verdict='OVERFLOW_FALSIFIED'
+          elif 'CANONICAL_CONTROL_OK' in text and 'OVERFLOW_SAFE_SUCCESS' in text:
+              verdict='OVERFLOW_SAFE_SUCCESS'
+          elif 'CANONICAL_CONTROL_OK' in text:
+              verdict='CONTROL_OK_PROBE_INCONCLUSIVE'
+          else:
+              verdict='HARNESS_INVALID'
+          summary=f'verdict={verdict}\nexit_code={rc}\n'
+          Path('output/VERDICT.txt').write_text(summary)
+          Path('results').mkdir(exist_ok=True)
+          Path('results/seaport-p1-overflow.txt').write_text(summary)
+          Path('results/seaport-p1-overflow-log.txt').write_text(text[-60000:])
+          print(summary)
+          PY
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add results/seaport-p1-overflow.txt results/seaport-p1-overflow-log.txt
+          if ! git diff --cached --quiet; then
+            git commit -m "Record Seaport overflow probe result"
+            git push origin HEAD:research/seaport-15-channel-20260909
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seaport-p1-overflow-${{ github.run_id }}
+          path: output
+          if-no-files-found: error
