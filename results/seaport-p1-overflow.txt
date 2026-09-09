@@ -1,0 +1,2 @@
+verdict=HARNESS_INVALID
+exit_code=missing

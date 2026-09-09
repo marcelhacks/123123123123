@@ -1,0 +1,8 @@
+Compiler run failed:
+Error (8961): Function cannot be declared as view because this expression (potentially) modifies the state.
+   --> test/AggregationOverflow.t.sol:163:43:
+    |
+163 |         (uint8 v, bytes32 r, bytes32 s) = vm.sign(privateKey, digest);
+    |                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Error: Compilation failed
