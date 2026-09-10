@@ -1,0 +1,41 @@
+name: Firefox Wasm Bootstrap
+on:
+  push:
+    branches: [firefox-wasm-hunt-bootstrap]
+    paths:
+      - '.github/workflows/firefox-wasm-bootstrap.yml'
+permissions:
+  contents: read
+jobs:
+  bootstrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Clone current Firefox source
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --depth 1 --filter=blob:none --sparse https://github.com/mozilla-firefox/firefox.git firefox
+          cd firefox
+          git sparse-checkout set js/src/wasm js/src/jit js/src/jit-test/tests/wasm js/src/shell js/src/tests/lib
+          git rev-parse HEAD | tee ../firefox-head.txt
+          tar -cJf ../firefox-wasm-source.tar.xz js/src/wasm js/src/jit js/src/jit-test/tests/wasm js/src/shell js/src/tests/lib
+      - name: Download current official jsshell
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir jsshell
+          curl -fL --retry 5 https://ftp.mozilla.org/pub/firefox/nightly/latest-mozilla-central/jsshell-linux-x86_64.zip -o jsshell.zip
+          unzip -q jsshell.zip -d jsshell
+          chmod +x jsshell/js
+          ./jsshell/js -e 'print(JSON.stringify(getBuildConfiguration()))' > jsshell-build-config.txt
+          ./jsshell/js --help > jsshell-help.txt 2>&1 || true
+          tar -czf current-jsshell.tar.gz jsshell jsshell-build-config.txt jsshell-help.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firefox-wasm-bootstrap
+          path: |
+            firefox-head.txt
+            firefox-wasm-source.tar.xz
+            current-jsshell.tar.gz
+          retention-days: 7
