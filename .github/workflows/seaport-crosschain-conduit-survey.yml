@@ -1,0 +1,151 @@
+name: Seaport cross-chain conduit authority survey
+
+on:
+  push:
+    branches:
+      - research/seaport-crosschain-conduit-20260910
+    paths:
+      - .github/workflows/seaport-crosschain-conduit-survey.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  survey:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          version: v1.8.1
+      - name: Probe deployed authority graphs
+        shell: bash
+        run: |
+          set -u
+          mkdir -p output
+          CONTROLLER=0x00000000F9490004C11Cef243f5400493c00Ad63
+          CONDUIT=0x1e0049783f008a0085193e00003d00cd54003c71
+          SEAPORT16=0x0000000000000068F116a894984e2DB1123eB395
+          SEAPORT15=0x00000000000000ADc04C56Bf30aC9d3c0aAF14dC
+          TRANSFER_HELPER=0x0000000000c2d145a2526bD8C716263bFeBe1A72
+          SENTINEL=0x0000000000000000000000000000000000000001
+
+          cat > chains.tsv <<'EOF'
+          ethereum	https://ethereum-rpc.publicnode.com
+          optimism	https://optimism-rpc.publicnode.com
+          arbitrum	https://arbitrum-one-rpc.publicnode.com
+          base	https://base-rpc.publicnode.com
+          polygon	https://polygon-bor-rpc.publicnode.com
+          avalanche	https://avalanche-c-chain-rpc.publicnode.com
+          bsc	https://bsc-rpc.publicnode.com
+          gnosis	https://gnosis-rpc.publicnode.com
+          linea	https://linea-rpc.publicnode.com
+          scroll	https://scroll-rpc.publicnode.com
+          blast	https://blast-rpc.publicnode.com
+          zora	https://rpc.zora.energy
+          kaia	https://public-en.node.kaia.io
+          mantle	https://rpc.mantle.xyz
+          mode	https://mainnet.mode.network
+          sei	https://evm-rpc.sei-apis.com
+          apechain	https://rpc.apechain.com
+          shape	https://mainnet.shape.network
+          abstract	https://api.mainnet.abs.xyz
+          unichain	https://mainnet.unichain.org
+          berachain	https://rpc.berachain.com
+          sonic	https://rpc.soniclabs.com
+          flow	https://mainnet.evm.nodes.onflow.org
+          soneium	https://rpc.soneium.org
+          worldchain	https://worldchain-mainnet.g.alchemy.com/public
+          ronin	https://api.roninchain.com/rpc
+          EOF
+          sed -i 's/^[[:space:]]*//' chains.tsv
+
+          printf 'name\tchain_id\tcontroller_code\tconduit_code\tseaport16_code\towner\tpending_owner\tchannel_count\tchannels\towner_code\towner_owner\towner_pending\towner_revoker\towner_initialized\tsafe_threshold\tsafe_modules\tanomaly\n' > output/survey.tsv
+          : > output/raw.txt
+
+          call() {
+            local rpc=$1 addr=$2 sig=$3
+            shift 3
+            timeout 25s cast call "$addr" "$sig" "$@" --rpc-url "$rpc" 2>/dev/null || true
+          }
+          code_size() {
+            local rpc=$1 addr=$2 c
+            c=$(timeout 25s cast code "$addr" --rpc-url "$rpc" 2>/dev/null || echo 0x)
+            echo $(( (${#c} > 2 ? ${#c}-2 : 0) / 2 ))
+          }
+
+          while IFS=$'\t' read -r name rpc; do
+            [ -n "$name" ] || continue
+            chain=$(timeout 25s cast chain-id --rpc-url "$rpc" 2>/dev/null || true)
+            if ! [[ "$chain" =~ ^[0-9]+$ ]]; then
+              printf '%s\t%s\t0\t0\t0\t\t\t0\t\t0\t\t\t\t\t\t\tRPC_UNAVAILABLE\n' "$name" "$chain" >> output/survey.tsv
+              continue
+            fi
+            cc=$(code_size "$rpc" "$CONTROLLER")
+            dc=$(code_size "$rpc" "$CONDUIT")
+            sc=$(code_size "$rpc" "$SEAPORT16")
+            owner=''; pending=''; channels=''; count=0; oc=0; oo=''; op=''; orv=''; oi=''; threshold=''; modules=''; anomaly=''
+            if [ "$cc" -gt 0 ]; then
+              owner=$(call "$rpc" "$CONTROLLER" 'ownerOf(address)(address)' "$CONDUIT" | tr -d '\n')
+              pending=$(call "$rpc" "$CONTROLLER" 'getPotentialOwner(address)(address)' "$CONDUIT" | tr -d '\n')
+              channels=$(call "$rpc" "$CONTROLLER" 'getChannels(address)(address[])' "$CONDUIT" | tr '\n' ',' | sed 's/,$//')
+              count=$(call "$rpc" "$CONTROLLER" 'getTotalChannels(address)(uint256)' "$CONDUIT" | tr -dc '0-9')
+              [ -n "$count" ] || count=0
+            fi
+            if [[ "$owner" =~ 0x[0-9a-fA-F]{40} ]]; then
+              owner=$(printf '%s' "$owner" | grep -Eo '0x[0-9a-fA-F]{40}' | head -1)
+              oc=$(code_size "$rpc" "$owner")
+              if [ "$oc" -gt 0 ]; then
+                oo=$(call "$rpc" "$owner" 'owner()(address)' | tr -d '\n')
+                op=$(call "$rpc" "$owner" 'potentialOwner()(address)' | tr -d '\n')
+                orv=$(call "$rpc" "$owner" 'getRevoker()(address)' | tr -d '\n')
+                oi=$(call "$rpc" "$owner" 'initialized()(bool)' | tr -d '\n')
+                threshold=$(call "$rpc" "$owner" 'getThreshold()(uint256)' | tr -dc '0-9')
+                modules=$(call "$rpc" "$owner" 'getModulesPaginated(address,uint256)(address[],address)' "$SENTINEL" 100 | tr '\n' ',' | sed 's/,$//')
+              fi
+            fi
+
+            if [ "$cc" -gt 0 ] && [ "$dc" -eq 0 ]; then anomaly="CONTROLLER_WITHOUT_CONDUIT"; fi
+            if [ "$dc" -gt 0 ] && [ "$cc" -eq 0 ]; then anomaly="CONDUIT_WITHOUT_CONTROLLER"; fi
+            if [ "$dc" -gt 0 ] && [ "$count" -eq 0 ]; then anomaly="NO_OPEN_CHANNELS"; fi
+            if [ "$dc" -gt 0 ] && [[ "$owner" =~ ^0x0{40}$ ]]; then anomaly="ZERO_CONDUIT_OWNER"; fi
+            if [ "$dc" -gt 0 ] && [ "$oc" -eq 0 ]; then anomaly="EOA_CONDUIT_OWNER"; fi
+            if [[ "$oi" =~ ^false$ ]]; then anomaly="UNINITIALIZED_OWNER_CONTRACT"; fi
+            if [ -n "$threshold" ] && [ "$threshold" = 0 ]; then anomaly="ZERO_SAFE_THRESHOLD"; fi
+
+            printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+              "$name" "$chain" "$cc" "$dc" "$sc" "$owner" "$pending" "$count" "$channels" "$oc" "$oo" "$op" "$orv" "$oi" "$threshold" "$modules" "$anomaly" >> output/survey.tsv
+            {
+              echo "===== $name chain=$chain rpc=$rpc ====="
+              echo "controller_code=$cc conduit_code=$dc seaport16_code=$sc"
+              echo "owner=$owner pending=$pending count=$count channels=$channels"
+              echo "owner_code=$oc owner_owner=$oo owner_pending=$op owner_revoker=$orv initialized=$oi threshold=$threshold modules=$modules anomaly=$anomaly"
+              for channel in "$SEAPORT16" "$SEAPORT15" "$TRANSFER_HELPER"; do
+                echo "channel=$channel code=$(code_size "$rpc" "$channel") open=$(call "$rpc" "$CONTROLLER" 'getChannelStatus(address,address)(bool)' "$CONDUIT" "$channel" | tr -d '\n')"
+              done
+            } >> output/raw.txt
+          done < chains.tsv
+
+          python3 - <<'PY'
+          import csv,json
+          from pathlib import Path
+          rows=list(csv.DictReader(open('output/survey.tsv'),delimiter='\t'))
+          anomalies=[r for r in rows if r.get('anomaly')]
+          live=[r for r in rows if int(r.get('conduit_code') or 0)>0]
+          Path('output/survey.json').write_text(json.dumps(rows,indent=2))
+          Path('output/anomalies.json').write_text(json.dumps(anomalies,indent=2))
+          Path('output/SUMMARY.txt').write_text(
+              f'probed={len(rows)}\nlive_conduits={len(live)}\nanomalies={len(anomalies)}\n' +
+              '\n'.join(f"{r['name']}:{r['anomaly']}" for r in anomalies)
+          )
+          print(Path('output/SUMMARY.txt').read_text())
+          PY
+          sha256sum output/* > output/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: seaport-crosschain-conduit-survey-${{ github.run_id }}
+          path: output
+          if-no-files-found: error
