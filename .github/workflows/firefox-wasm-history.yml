@@ -1,0 +1,45 @@
+name: Generic Firefox Wasm History Export
+on:
+  push:
+    branches: [firefox-wasm-hunt-bootstrap]
+    paths:
+      - '.github/workflows/firefox-wasm-history.yml'
+permissions:
+  contents: read
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Export recent Wasm and JIT source history
+        shell: bash
+        run: |
+          set -euxo pipefail
+          git clone --filter=blob:none --no-checkout https://github.com/mozilla-firefox/firefox.git firefox
+          cd firefox
+          git fetch --depth=1500 origin main
+          git checkout --detach ffc07a625994a9db71c7b6fbfe4be2ed64ed1aee
+          git log --since='2026-01-01' --date=iso-strict --format='%H%x09%ad%x09%s' -- \
+            js/src/wasm js/src/jit > ../wasm-jit-history.tsv
+          git log --since='2026-01-01' -p --full-index -- \
+            js/src/wasm/WasmBaselineCompile.cpp \
+            js/src/wasm/WasmBCFrame.cpp \
+            js/src/wasm/WasmBCFrame.h \
+            js/src/wasm/WasmBCRegDefs-inl.h \
+            js/src/wasm/WasmStubs.cpp \
+            js/src/jit/CodeGenerator.cpp \
+            js/src/jit/MacroAssembler.cpp > ../wasm-jit-history.patch
+          git bundle create ../firefox-wasm-history.bundle HEAD --branches --tags || \
+            git bundle create ../firefox-wasm-history.bundle HEAD
+          cd ..
+          xz -T0 -9 wasm-jit-history.patch
+          sha256sum wasm-jit-history.tsv wasm-jit-history.patch.xz firefox-wasm-history.bundle > history.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firefox-wasm-history
+          path: |
+            wasm-jit-history.tsv
+            wasm-jit-history.patch.xz
+            firefox-wasm-history.bundle
+            history.sha256
+          retention-days: 7
