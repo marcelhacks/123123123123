@@ -1,0 +1,34 @@
+name: Generic WebAssembly Tools Build
+on:
+  push:
+    branches: [firefox-wasm-hunt-bootstrap]
+    paths:
+      - '.github/workflows/generic-wasm-tools-build.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Build wasm-tools and wasmtime CLIs
+        shell: bash
+        run: |
+          set -euxo pipefail
+          cargo install wasm-tools --locked
+          cargo install wasmtime-cli --locked --features all-arch
+          mkdir -p bundle/bin
+          cp "$(command -v wasm-tools)" bundle/bin/
+          cp "$(command -v wasmtime)" bundle/bin/
+          bundle/bin/wasm-tools --version > bundle/versions.txt
+          bundle/bin/wasmtime --version >> bundle/versions.txt
+          tar -cJf wasm-research-tools-linux-x86_64.tar.xz bundle
+          sha256sum wasm-research-tools-linux-x86_64.tar.xz > wasm-research-tools-linux-x86_64.tar.xz.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-research-tools-linux-x86_64
+          path: |
+            wasm-research-tools-linux-x86_64.tar.xz
+            wasm-research-tools-linux-x86_64.tar.xz.sha256
+          retention-days: 7
