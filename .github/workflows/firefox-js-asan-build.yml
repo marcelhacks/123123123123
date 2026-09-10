@@ -43,7 +43,6 @@ jobs:
           ac_add_options --enable-address-sanitizer
           ac_add_options --disable-jemalloc
           ac_add_options --enable-gczeal
-          ac_add_options --disable-crashreporter
           mk_add_options MOZ_OBJDIR=@TOPSRCDIR@/obj-js-asan
           mk_add_options MOZ_MAKE_FLAGS=-j2
           EOF
